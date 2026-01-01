@@ -1,0 +1,16 @@
+# This is a sample Caddyfile. You can edit this file to add your own services.
+# You can use [caddy-self-hosted](https://github.com/AiratTop/caddy-self-hosted)
+# in the same `shared_network`
+
+# WordPress blog service.
+blog.example.com {
+	reverse_proxy wp:80
+}
+
+# phpMyAdmin service.
+pma.example.com {
+	# Prevents search engines from indexing this site.
+	header X-Robots-Tag "noindex, nofollow"
+
+	reverse_proxy pma:80
+}

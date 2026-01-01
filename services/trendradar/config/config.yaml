@@ -1,0 +1,117 @@
+# TrendRadar config template for Kontrola
+#
+# Notes:
+# - This file is committed to the repo. Do NOT place secrets (webhooks/tokens) here.
+#   Use environment variables in `.env` instead.
+# - TrendRadar environment variables override values in this file.
+#
+# Upstream docs: https://github.com/sansan0/TrendRadar
+
+app:
+  timezone: "UTC"
+  show_version_update: false
+
+# Trending platforms to crawl (subset of upstream defaults).
+platforms:
+  - id: "zhihu"
+    name: "Zhihu"
+  - id: "weibo"
+    name: "Weibo"
+  - id: "douyin"
+    name: "Douyin"
+  - id: "bilibili-hot-search"
+    name: "Bilibili Hot Search"
+  - id: "baidu"
+    name: "Baidu Hot Search"
+  - id: "toutiao"
+    name: "Toutiao"
+  - id: "thepaper"
+    name: "The Paper"
+  - id: "wallstreetcn-hot"
+    name: "Wallstreetcn"
+
+# RSS crawling is optional; keep it off by default.
+rss:
+  enabled: false
+  freshness_filter:
+    enabled: true
+    max_age_days: 3
+  feeds: []
+
+report:
+  mode: "current" # daily | current | incremental
+  rank_threshold: 5
+  sort_by_position_first: false
+  max_news_per_keyword: 0
+  reverse_content_order: false
+
+# Disable push notifications by default (Kontrola consumes data locally).
+notification:
+  enabled: false
+  push_window:
+    enabled: false
+    start: "09:00"
+    end: "18:00"
+    once_per_day: false
+  channels:
+    feishu:
+      webhook_url: ""
+    dingtalk:
+      webhook_url: ""
+    wework:
+      webhook_url: ""
+      msg_type: "markdown"
+    telegram:
+      bot_token: ""
+      chat_id: ""
+    email:
+      from: ""
+      password: ""
+      to: ""
+      smtp_server: ""
+      smtp_port: ""
+    ntfy:
+      server_url: "https://ntfy.sh"
+      topic: ""
+      token: ""
+    bark:
+      url: ""
+    slack:
+      webhook_url: ""
+
+# Storage configuration: use MySQL instead of local SQLite files.
+# This integrates TrendRadar output directly with the WordPress MySQL database.
+# TrendRadar will create a separate "trendradar" database on wp-db.
+storage:
+  backend: "mysql"
+  formats:
+    sqlite: true
+    txt: false
+    html: true
+  mysql:
+    host: "wp-db"
+    port: 3306
+    user: "wordpressdb"
+    password: "change-me"  # Override with TRENDRADAR_MYSQL_PASSWORD env var
+    database: "trendradar"
+  local:
+    data_dir: "output"
+    retention_days: 0
+
+advanced:
+  crawler:
+    enabled: true
+    request_interval: 1000
+    use_proxy: false
+    default_proxy: ""
+  rss:
+    request_interval: 2000
+    timeout: 15
+    use_proxy: false
+    proxy_url: ""
+    notification_enabled: false
+  weight:
+    rank: 0.6
+    frequency: 0.3
+    hotness: 0.1
+  max_accounts_per_channel: 3

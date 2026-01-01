@@ -1,0 +1,406 @@
+name: wordpress
+services:
+  wp-db:
+    container_name: wp-db
+    hostname: wp-db
+    image: mysql:latest
+    networks:
+      - shared_network
+    restart: always
+    volumes:
+      - ./data/wp-db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PWD}
+      MYSQL_DATABASE: ${MYSQL_DB}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PWD}
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-u', 'root', '-p$${MYSQL_ROOT_PWD}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  wp:
+    container_name: wp
+    hostname: wp
+    image: wordpress:latest
+    networks:
+      - shared_network
+    ports:
+      - '8888:80'
+    restart: always
+    depends_on:
+      wp-db:
+        condition: service_healthy
+    volumes:
+      - ./data/wp:/var/www/html
+      - ./config/php.ini:/usr/local/etc/php/conf.d/conf.ini:ro
+      - ./kontrola/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./kontrola/wp-content/plugins:/var/www/html/wp-content/plugins:ro
+    environment:
+      WORDPRESS_DB_HOST: wp-db
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PWD}
+      WORDPRESS_DB_NAME: ${MYSQL_DB}
+      KONTROLA_AGENT_URL: ${KONTROLA_AGENT_URL:-http://kontrola-agent:8000}
+      KONTROLA_AGENT_SHARED_SECRET: ${KONTROLA_AGENT_SHARED_SECRET:-}
+  wp-cli:
+    container_name: wp-cli
+    hostname: wp-cli
+    image: wordpress:cli
+    networks:
+      - shared_network
+    depends_on:
+      wp-db:
+        condition: service_healthy
+      wp:
+        condition: service_started
+    volumes:
+      - ./data/wp:/var/www/html
+      - ./config/php.ini:/usr/local/etc/php/conf.d/conf.ini:ro
+      - ./kontrola/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./kontrola/wp-content/plugins:/var/www/html/wp-content/plugins:ro
+    environment:
+      WORDPRESS_DB_HOST: wp-db
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PWD}
+      WORDPRESS_DB_NAME: ${MYSQL_DB}
+  pma:
+    container_name: pma
+    hostname: pma
+    image: phpmyadmin:latest
+    networks:
+      - shared_network
+    ports:
+      - '8081:80'
+    restart: always
+    depends_on:
+      wp-db:
+        condition: service_healthy
+    volumes:
+      - ./config/php.ini:/usr/local/etc/php/conf.d/conf.ini:ro
+    environment:
+      PMA_HOST: wp-db
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PWD}
+      UPLOAD_LIMIT: 50M
+
+  # Optional Kontrola external agent service.
+  # Kept behind a compose profile so the default stack remains minimal.
+  kontrola-agent:
+    container_name: kontrola-agent
+    hostname: kontrola-agent
+    build:
+      context: ./services/kontrola-agent
+    profiles:
+      - kontrola
+      - trends
+    networks:
+      - shared_network
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      KONTROLA_AGENT_SHARED_SECRET: ${KONTROLA_AGENT_SHARED_SECRET:-}
+      # TrendRadar MySQL database (if trends profile is enabled)
+      TRENDRADAR_MYSQL_HOST: ${TRENDRADAR_MYSQL_HOST:-wp-db}
+      TRENDRADAR_MYSQL_PORT: ${TRENDRADAR_MYSQL_PORT:-3306}
+      TRENDRADAR_MYSQL_USER: ${TRENDRADAR_MYSQL_USER:-wordpressdb}
+      TRENDRADAR_MYSQL_PASSWORD: ${TRENDRADAR_MYSQL_PASSWORD:-${MYSQL_PWD}}
+      TRENDRADAR_MYSQL_DATABASE: ${TRENDRADAR_MYSQL_DATABASE:-trendradar}
+      # Redis caching (if cache profile is enabled)
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
+      # Vector database connections (configured during onboarding)
+      VECTOR_DB_BACKEND: ${VECTOR_DB_BACKEND:-lancedb}
+      LANCEDB_PATH: ${LANCEDB_PATH:-/app/data/lancedb}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      CHROMA_HOST: ${CHROMA_HOST:-chroma}
+      CHROMA_PORT: ${CHROMA_PORT:-8000}
+      QDRANT_HOST: ${QDRANT_HOST:-qdrant}
+      QDRANT_PORT: ${QDRANT_PORT:-6333}
+      PGVECTOR_HOST: ${PGVECTOR_HOST:-pgvector}
+      PGVECTOR_PORT: ${PGVECTOR_PORT:-5432}
+      PGVECTOR_USER: ${PGVECTOR_USER:-kontrola}
+      PGVECTOR_PASSWORD: ${PGVECTOR_PASSWORD:-kontrola}
+      PGVECTOR_DB: ${PGVECTOR_DB:-vectors}
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      PINECONE_ENVIRONMENT: ${PINECONE_ENVIRONMENT:-}
+      # MinIO object storage (if minio profile is enabled)
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    ports:
+      - '8787:8000'
+    volumes:
+      # Mount persistent LanceDB storage (embedded vector DB)
+      - ./data/kontrola/lancedb:/app/data/lancedb
+
+  # Optional TrendRadar services (crawler/web + MCP AI analysis).
+  # Kept behind a compose profile so the default stack remains minimal.
+  trendradar:
+    container_name: trendradar
+    hostname: trendradar
+    image: wantcat/trendradar:latest
+    profiles:
+      - trends
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      # TrendRadar's built-in report webserver (localhost-only by default).
+      - '127.0.0.1:${TRENDRADAR_WEBSERVER_PORT:-8080}:8080'
+    volumes:
+      # Config is intentionally read-only; avoid placing secrets in config.yaml.
+      - ./services/trendradar/config:/app/config:ro
+      # Output is persisted locally for historical trend tracking.
+      - ./data/trendradar/output:/app/output
+    environment:
+      # Prefer IANA TZ names (e.g., America/New_York). Defaults to UTC.
+      TZ: ${TRENDRADAR_TIMEZONE:-UTC}
+      TIMEZONE: ${TRENDRADAR_TIMEZONE:-UTC}
+
+      # Enable crawling + report generation, but keep notifications off by default.
+      ENABLE_CRAWLER: ${TRENDRADAR_ENABLE_CRAWLER:-true}
+      ENABLE_NOTIFICATION: ${TRENDRADAR_ENABLE_NOTIFICATION:-false}
+
+      # Web report hosting
+      ENABLE_WEBSERVER: ${TRENDRADAR_ENABLE_WEBSERVER:-true}
+      WEBSERVER_PORT: 8080
+
+      # MySQL backend credentials (TrendRadar will create/use the trendradar database on wp-db).
+      # Using MySQL integrates TrendRadar directly with the existing WordPress DB infrastructure.
+      STORAGE_BACKEND: ${TRENDRADAR_STORAGE_BACKEND:-mysql}
+      MYSQL_HOST: ${TRENDRADAR_MYSQL_HOST:-wp-db}
+      MYSQL_PORT: ${TRENDRADAR_MYSQL_PORT:-3306}
+      MYSQL_USER: ${TRENDRADAR_MYSQL_USER:-wordpressdb}
+      MYSQL_PASSWORD: ${TRENDRADAR_MYSQL_PASSWORD:-${MYSQL_PWD}}
+      MYSQL_DATABASE: ${TRENDRADAR_MYSQL_DATABASE:-trendradar}
+      STORAGE_TXT_ENABLED: ${TRENDRADAR_STORAGE_TXT_ENABLED:-false}
+      STORAGE_HTML_ENABLED: ${TRENDRADAR_STORAGE_HTML_ENABLED:-true}
+      LOCAL_RETENTION_DAYS: ${TRENDRADAR_LOCAL_RETENTION_DAYS:-0}
+
+      # Scheduler
+      RUN_MODE: ${TRENDRADAR_RUN_MODE:-cron}
+      CRON_SCHEDULE: ${TRENDRADAR_CRON_SCHEDULE:-*/30 * * * *}
+      IMMEDIATE_RUN: ${TRENDRADAR_IMMEDIATE_RUN:-true}
+
+  trendradar-mcp:
+    container_name: trendradar-mcp
+    hostname: trendradar-mcp
+    image: wantcat/trendradar-mcp:latest
+    profiles:
+      - trends
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      # Expose MCP HTTP endpoint to localhost only (TrendRadar's recommended default).
+      - '127.0.0.1:${TRENDRADAR_MCP_PORT:-3333}:3333'
+    volumes:
+      - ./services/trendradar/config:/app/config:ro
+      - ./data/trendradar/output:/app/output:ro
+    environment:
+      TZ: ${TRENDRADAR_TIMEZONE:-UTC}
+      TIMEZONE: ${TRENDRADAR_TIMEZONE:-UTC}
+
+  # Redis caching layer for fast key-value storage and SQL query caching
+  redis:
+    container_name: kontrola-redis
+    hostname: redis
+    image: redis:7-alpine
+    profiles:
+      - cache
+    networks:
+      - shared_network
+    restart: unless-stopped
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 1gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Milvus vector database with GPU support (production-grade)
+  # Includes dependencies: etcd (metadata) and minio (object storage for vectors)
+  milvus-etcd:
+    container_name: milvus-etcd
+    hostname: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.15
+    profiles:
+      - milvus
+    networks:
+      - shared_network
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ./data/milvus/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  milvus-minio:
+    container_name: milvus-minio
+    hostname: milvus-minio
+    image: minio/minio:latest
+    profiles:
+      - milvus
+    networks:
+      - shared_network
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./data/milvus/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  milvus:
+    container_name: milvus
+    hostname: milvus
+    image: milvusdb/milvus:v2.6.7-gpu
+    profiles:
+      - milvus
+    networks:
+      - shared_network
+    restart: unless-stopped
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    ports:
+      - "19530:19530"  # gRPC
+      - "9091:9091"    # Metrics
+    volumes:
+      - ./data/milvus/db:/var/lib/milvus
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Milvus web UI (Attu) for visual management
+  milvus-attu:
+    container_name: milvus-attu
+    hostname: milvus-attu
+    image: zilliz/attu:latest
+    profiles:
+      - milvus
+    networks:
+      - shared_network
+    ports:
+      - "19121:3000"
+    environment:
+      MILVUS_URL: milvus:19530
+
+  # Chroma vector database (simple, built-in embeddings)
+  chroma:
+    container_name: kontrola-chroma
+    hostname: chroma
+    image: chromadb/chroma:latest
+    profiles:
+      - chroma
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      - "8100:8000"  # Changed from 8000 to avoid conflict with kontrola-agent
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  # Qdrant vector search engine with web UI
+  qdrant:
+    container_name: kontrola-qdrant
+    hostname: qdrant
+    image: qdrant/qdrant:latest
+    profiles:
+      - qdrant
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC
+      - "6335:6335"  # Web UI
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+
+  # PostgreSQL with pgvector extension for SQL-based vector search
+  pgvector:
+    container_name: kontrola-pgvector
+    hostname: pgvector
+    image: pgvector/pgvector:pg16
+    profiles:
+      - pgvector
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/pgvector:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${PGVECTOR_USER:-kontrola}
+      POSTGRES_PASSWORD: ${PGVECTOR_PASSWORD:-kontrola}
+      POSTGRES_DB: ${PGVECTOR_DB:-vectors}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kontrola"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO object storage (S3-compatible) for large files, models, backups
+  minio:
+    container_name: kontrola-minio
+    hostname: minio
+    image: minio/minio:latest
+    profiles:
+      - minio
+    networks:
+      - shared_network
+    restart: unless-stopped
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console UI
+    volumes:
+      - ./data/minio:/data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  shared_network:
+    name: shared_network
+    driver: bridge
+    external: true
